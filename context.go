@@ -10,25 +10,6 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// 定义上下文结构体
-type Context struct {
-	Data     map[string]interface{}
-	Request  *http.Request
-	Response http.ResponseWriter
-}
-
-// 创建上下文实例
-func makeHandler(handlerFunc func(*Context)) http.HandlerFunc {
-	return func(response http.ResponseWriter, request *http.Request) {
-		ctx := &Context{
-			Data:     make(map[string]interface{}),
-			Request:  request,
-			Response: response,
-		}
-		handlerFunc(ctx)
-	}
-}
-
 // 根据key获取数据
 func (ctx *Context) GetData(key string) interface{} {
 	return ctx.Data[key]
@@ -41,7 +22,11 @@ func (ctx *Context) Header(key, val string) {
 
 // 渲染页面模板
 func (ctx *Context) Render(tpl string) {
-	tmpl := template.Must(template.ParseFiles(tpl))
+	tmpl, err := template.ParseFiles(tpl)
+	if err != nil {
+		ctx.Error(err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err := tmpl.Execute(ctx.Response, ctx.Data); err != nil {
 		ctx.Error(err.Error(), http.StatusInternalServerError)
 	}
@@ -75,8 +60,8 @@ func (ctx *Context) CurrentRoute() *mux.Route {
 }
 
 // 响应错误
-func (ctx *Context) Error(error string, code int) {
-	http.Error(ctx.Response, error, code)
+func (ctx *Context) Error(message string, statusCode int) {
+	http.Error(ctx.Response, message, statusCode)
 }
 
 // 解析表单
