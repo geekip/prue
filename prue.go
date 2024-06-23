@@ -1,31 +1,55 @@
 package prue
 
 import (
-	"log"
+	"fmt"
 	"net"
 	"net/http"
-
-	"github.com/gorilla/mux"
+	"sync"
 )
 
-// 启动服务
-func (app *Application) Listen(addr string) {
-	router := mux.NewRouter()
-	mountRoutes(router, app.Routes)
+const Version = "v1.0.0"
 
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer listener.Close()
-	log.Printf("Server is listening on %s\n", addr)
-
-	if err := http.Serve(listener, router); err != nil {
-		log.Fatal(err)
-	}
+type application struct {
+	Router Router
 }
 
-// 实例化
-func Init(routes Routes) *Application {
-	return &Application{Routes: routes}
+var (
+	once sync.Once
+	app  *application
+)
+
+func New(router Router) *application {
+	once.Do(func() {
+		app = &application{Router: router}
+	})
+	return app
+}
+
+func (a *application) Run(addr string) error {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		debugPrintError(err)
+		return err
+	}
+	debugPrint("Server is listening on %s\n", addr)
+	return a.runWithListener(listener)
+}
+
+func (a *application) RunListener(listener net.Listener) error {
+	debugPrint("Server is listening on %s\n", listener.Addr().String())
+	return a.runWithListener(listener)
+}
+
+func (a *application) runWithListener(listener net.Listener) error {
+	defer func() {
+		if r := recover(); r != nil {
+			debugPrintError(fmt.Errorf("server panic: %v", r))
+		}
+	}()
+
+	err := http.Serve(listener, &a.Router)
+	if err != nil {
+		debugPrintError(err)
+	}
+	return err
 }

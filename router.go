@@ -2,51 +2,113 @@ package prue
 
 import (
 	"net/http"
-
-	"github.com/gorilla/mux"
 )
 
-// 注册中间件
-func applyMiddlewares(ctx *Context, handler Handler, middlewares Middlewares) {
-	if len(middlewares) == 0 {
-		handler(ctx)
+type Handler func(ctx *Context)
+
+type Router struct {
+	prefix        string
+	trie          *trie
+	notFound      Handler
+	internalError func(ctx *Context, err interface{})
+	middlewares   []Handler
+}
+
+func NewRouter() *Router {
+	return &Router{
+		trie:          newTrie(),
+		notFound:      defaultNotFound,
+		internalError: defaultInternalError,
+	}
+}
+
+func (r *Router) Use(middleware ...Handler) *Router {
+	r.middlewares = append(r.middlewares, middleware...)
+	return r
+}
+
+func (r *Router) PathPrefix(pattern string) *Router {
+	return &Router{
+		prefix:      pattern,
+		trie:        r.trie,
+		middlewares: r.middlewares,
+	}
+}
+
+func (r *Router) Handle(method, pattern string, handler Handler) *Router {
+	pattern = r.prefix + "/" + pattern
+	r.trie.add(method, pattern, handler, r.middlewares)
+	return r
+}
+
+func defaultNotFound(ctx *Context) {
+	http.Error(ctx.Response, "404 page not founds", http.StatusNotFound)
+}
+
+func defaultInternalError(ctx *Context, err interface{}) {
+	http.Error(ctx.Response, "500 internal server error", http.StatusInternalServerError)
+}
+
+func (r *Router) NotFound(handler Handler) {
+	r.notFound = handler
+}
+
+func (r *Router) InternalError(handler func(ctx *Context, err interface{})) {
+	r.internalError = handler
+}
+
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	ctx := newContext(w, req)
+
+	defer func() {
+		if err := recover(); err != nil {
+			r.internalError(ctx, err)
+		}
+		releaseContext(ctx)
+	}()
+
+	node := r.trie.find(req.Method, ctx.Path)
+	if node == nil {
+		r.notFound(ctx)
 		return
 	}
-
-	var next Handler
-	next = func(ctx *Context) {
-		if len(middlewares) == 0 {
-			handler(ctx)
-			return
-		}
-		middleware := middlewares[0]
-		middlewares = middlewares[1:]
-		middleware(ctx, next)
-	}
-
-	next(ctx)
+	ctx.Params = node.params
+	ctx.handlers = node.handlers
+	ctx.Next()
 }
 
-// 创建上下文实例
-func makeHandler(handlerFunc Handler, middlewares Middlewares) http.HandlerFunc {
-	return func(response http.ResponseWriter, request *http.Request) {
-		ctx := &Context{
-			Data:     make(map[string]interface{}),
-			Request:  request,
-			Response: response,
-		}
-		applyMiddlewares(ctx, handlerFunc, middlewares)
-	}
+func (r *Router) ALL(pattern string, handle Handler) *Router {
+	return r.Handle(wildcardPrefix, pattern, handle)
 }
 
-// 注册路由
-func mountRoutes(router *mux.Router, routes Routes) {
-	for _, route := range routes {
-		handler := makeHandler(route.Handler, route.Middlewares)
-		router.Methods(route.Methods...).Path(route.Path).Handler(handler).Name(route.Name)
-		if len(route.SubRoutes) > 0 {
-			subRouter := router.PathPrefix(route.Path).Subrouter()
-			mountRoutes(subRouter, route.SubRoutes)
-		}
-	}
+func (r *Router) GET(pattern string, handler Handler) *Router {
+	return r.Handle(http.MethodGet, pattern, handler)
+}
+
+func (r *Router) HEAD(pattern string, handler Handler) *Router {
+	return r.Handle(http.MethodHead, pattern, handler)
+}
+
+func (r *Router) POST(pattern string, handler Handler) *Router {
+	return r.Handle(http.MethodPost, pattern, handler)
+}
+
+func (r *Router) PUT(pattern string, handler Handler) *Router {
+	return r.Handle(http.MethodPut, pattern, handler)
+}
+
+func (r *Router) PATCH(pattern string, handler Handler) *Router {
+	return r.Handle(http.MethodPatch, pattern, handler)
+}
+
+func (r *Router) OPTIONS(pattern string, handler Handler) *Router {
+	return r.Handle(http.MethodOptions, pattern, handler)
+}
+
+func (r *Router) DELETE(pattern string, handle Handler) *Router {
+	return r.Handle(http.MethodDelete, pattern, handle)
+}
+
+func (r *Router) TRACE(pattern string, handler Handler) *Router {
+	return r.Handle(http.MethodTrace, pattern, handler)
 }
