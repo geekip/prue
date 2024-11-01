@@ -1,6 +1,7 @@
 package prue
 
 import (
+	"path"
 	"strings"
 	"unicode"
 )
@@ -14,13 +15,22 @@ func isASCII(s string) bool {
 	return true
 }
 
-func normalizePath(pattern string) string {
-	if !strings.HasPrefix(pattern, "/") {
-		pattern = "/" + pattern
+func filterFlags(content string) string {
+	for i, char := range content {
+		if char == ' ' || char == ';' {
+			return content[:i]
+		}
 	}
-	pattern = strings.ReplaceAll(pattern, "//", "/")
-	if len(pattern) > 1 && strings.HasSuffix(pattern, "/") {
-		pattern = strings.TrimSuffix(pattern, "/")
+	return content
+}
+
+func pathJoin(absolutePath, relativePath string) string {
+	if relativePath == "" {
+		return absolutePath
 	}
-	return pattern
+	finalPath := path.Join(absolutePath, relativePath)
+	if strings.HasSuffix(relativePath, "/") && !strings.HasSuffix(finalPath, "/") {
+		return finalPath + "/"
+	}
+	return finalPath
 }

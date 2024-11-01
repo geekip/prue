@@ -18,9 +18,7 @@ var (
 	configOnce sync.Once
 )
 
-// 创建一个新实例并加载配置文件
 func NewConfig(filePath string, structs interface{}) (*config, error) {
-	// 确保传入的structs是指针类型
 	if reflect.TypeOf(structs).Kind() != reflect.Ptr {
 		return nil, fmt.Errorf("structs must be a pointer to a struct")
 	}
@@ -29,7 +27,6 @@ func NewConfig(filePath string, structs interface{}) (*config, error) {
 		Config = &config{structs: structs}
 	})
 
-	// 加载JSON配置文件
 	if err := Config.jsonLoader(filePath, structs); err != nil {
 		return nil, err
 	}
@@ -37,7 +34,6 @@ func NewConfig(filePath string, structs interface{}) (*config, error) {
 	return Config, nil
 }
 
-// 调用结构体的Init方法进行初始化
 func (c *config) InitStructs() error {
 	ref := reflect.ValueOf(c.structs)
 	if ref.Kind() == reflect.Ptr && ref.Elem().Kind() == reflect.Struct {
@@ -52,7 +48,6 @@ func (c *config) InitStructs() error {
 	return nil
 }
 
-// Get 方法根据键获取配置字段的值
 func (c *config) Get(key string) interface{} {
 	ref := reflect.ValueOf(c.structs).Elem()
 	field := ref.FieldByName(key)
@@ -62,7 +57,6 @@ func (c *config) Get(key string) interface{} {
 	return field.Interface()
 }
 
-// 加载JSON文件并解码到结构体
 func (c *config) jsonLoader(path string, structure interface{}) error {
 	file, err := os.Open(filepath.Clean(path))
 	if err != nil {

@@ -3,7 +3,6 @@ package prue
 import (
 	"encoding/json"
 	"html/template"
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -14,54 +13,40 @@ import (
 type Context struct {
 	Request  *http.Request
 	Response http.ResponseWriter
+	Method   string
 	Path     string
+	Pattern  string
 	Data     map[string]interface{}
 	Params   map[string]string
-	handlers []Handler
-	index    int8
+	Keys     map[string]any
+	Next     func()
+	mu       sync.RWMutex
 }
 
-const abortIndex int8 = math.MaxInt8 >> 1
+var (
+	contextPool = sync.Pool{
+		New: func() interface{} {
+			return &Context{}
+		},
+	}
+	quoteEscaper  = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+	templateCache = sync.Map{}
+)
 
-var contextPool = sync.Pool{
-	New: func() interface{} {
-		return &Context{}
-	},
-}
-var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
-
-func newContext(w http.ResponseWriter, req *http.Request) *Context {
+func newContext(w http.ResponseWriter, r *http.Request) *Context {
 	ctx := contextPool.Get().(*Context)
-	ctx.Request = req
+	ctx.Request = r
 	ctx.Response = w
-	ctx.Path = normalizePath(req.URL.Path)
+	ctx.Method = r.Method
+	ctx.Path = r.URL.Path
 	ctx.Data = make(map[string]interface{})
 	ctx.Params = make(map[string]string)
-	ctx.index = -1
+	ctx.Keys = make(map[string]any)
 	return ctx
 }
 
-func releaseContext(ctx *Context) {
+func (ctx *Context) release() {
 	contextPool.Put(ctx)
-}
-
-func (ctx *Context) Next() {
-	ctx.index++
-	for ctx.index < int8(len(ctx.handlers)) {
-		if ctx.handlers[ctx.index] == nil {
-			continue
-		}
-		ctx.handlers[ctx.index](ctx)
-		ctx.index++
-	}
-}
-
-func (ctx *Context) IsAborted() bool {
-	return ctx.index >= abortIndex
-}
-
-func (ctx *Context) Abort() {
-	ctx.index = abortIndex
 }
 
 func (ctx *Context) Error(message string, statusCode int) {
@@ -78,6 +63,23 @@ func (ctx *Context) Header(key, val string) {
 
 func (ctx *Context) GetHeader(key string) string {
 	return ctx.Request.Header.Get(key)
+}
+
+func (ctx *Context) ContentType() string {
+	return filterFlags(ctx.GetHeader("Content-Type"))
+}
+
+func (ctx *Context) Set(key string, value any) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.Keys[key] = value
+}
+
+func (ctx *Context) Get(key string) (value any, exists bool) {
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+	value, exists = ctx.Keys[key]
+	return
 }
 
 func (ctx *Context) ParseForm() error {
@@ -104,17 +106,20 @@ func (ctx *Context) SetCookie(cookie *http.Cookie) {
 	http.SetCookie(ctx.Response, cookie)
 }
 
-func (ctx *Context) Cookie(name string) (*http.Cookie, error) {
-	return ctx.Request.Cookie(name)
+func (ctx *Context) Cookie(name string) (string, error) {
+	cookie, err := ctx.Request.Cookie(name)
+	if err != nil {
+		return "", err
+	}
+	val, _ := url.QueryUnescape(cookie.Value)
+	return val, nil
 }
 
 func (ctx *Context) Cookies() []*http.Cookie {
 	return ctx.Request.Cookies()
 }
 
-var templateCache = sync.Map{}
-
-func (ctx *Context) Render(tpl string) {
+func (ctx *Context) Html(tpl string) {
 	tmpl, ok := templateCache.Load(tpl)
 	if !ok {
 		var err error
@@ -154,12 +159,26 @@ func (ctx *Context) GetClientIp() string {
 	return strings.Split(ctx.Request.RemoteAddr, ":")[0]
 }
 
+func (c *Context) File(filepath string) {
+	http.ServeFile(c.Response, c.Request, filepath)
+}
+
+func (c *Context) Files(filepath string, fs http.FileSystem) {
+	defer func(path string) {
+		c.Request.URL.Path = path
+	}(c.Request.URL.Path)
+
+	c.Request.URL.Path = filepath
+	http.FileServer(fs).ServeHTTP(c.Response, c.Request)
+}
+
 func (ctx *Context) FileAttachment(filepath, filename string) {
-	key := "Content-Disposition"
+	headerKey := "Content-Disposition"
+	commonVal := "attachment; filename"
 	if isASCII(filename) {
-		ctx.Header(key, `attachment; filename="`+quoteEscaper.Replace(filename)+`"`)
+		ctx.Header(headerKey, commonVal+`="`+quoteEscaper.Replace(filename)+`"`)
 	} else {
-		ctx.Header(key, `attachment; filename*=UTF-8''`+url.QueryEscape(filename))
+		ctx.Header(headerKey, commonVal+`*=UTF-8''`+url.QueryEscape(filename))
 	}
-	http.ServeFile(ctx.Response, ctx.Request, filepath)
+	ctx.File(filepath)
 }
